@@ -9,6 +9,7 @@ library(ggplot2)
 library(readr)
 library(zoo)
 library(plotly)
+library(GGally)
 library(VIM)
 library(httr)
 cat(content(GET("https://raw.githubusercontent.com/iascchen/VisHealth/master/R/calendarHeat.R"), "text"), file="calendarHeat.R")
@@ -96,37 +97,40 @@ power %>%
   geom_line(aes(y=Global_active_power),size=1,color="green1")
 #take value just before (using zoo library)
 power <- na.locf(power, fromLast = FALSE) 
+anyNA(power)
 
-#------------------------Forecasting monthly global energy consumption--------------------------------------
-#forecast total, reactive, sub-meter3 and rest?
+#-------------------------------------------Forecasting monthly energy consumption--------------------------------------
+#forecast global active energy, forecast global reactive energy, forecast sub-meter 3
 
 #Prepare data
-power <- mutate(power,Other = ((Global_active_power*(1000/60)) - Sub_metering_1 - Sub_metering_2 - Sub_metering_3))
- #new variable with the energy consumption that is not detected by the sub-meters
+power[,1:2] <- power[ ,1:2]*(1000/60) #change un its to Wh
+power <- mutate(power,Other = (Global_active_power - Sub_metering_1 - Sub_metering_2 - Sub_metering_3))
+#new variable with the energy consumption that is not detected by the sub-meters
+
 power_monthly <- power %>%
   filter (DateTime_GMT>=ymd_hms(20070101000000) & DateTime_GMT<=ymd_hms(20101031235900)) %>% #only take complete months
   group_by(month(DateTime_GMT),year(DateTime_GMT)) %>%
-  summarise(active=sum(Global_active_power),reactive=sum(Global_reactive_power), #Kw can add
-            sub_metering_1=mean(Sub_metering_1),sub_metering_2=mean(Sub_metering_2), #Wh is average because has time unit
-            sub_metering_3=mean(Sub_metering_3), other=mean(Other)) %>%
+  summarise(active=sum(Global_active_power)/1000,reactive=sum(Global_reactive_power)/1000, #Kw can add
+            sub_metering_1=sum(Sub_metering_1)/1000,sub_metering_2=sum(Sub_metering_2)/1000, #Wh is average because has time unit
+            sub_metering_3=sum(Sub_metering_3)/1000, other=sum(Other)/1000) %>%
   arrange(`year(DateTime_GMT)`,`month(DateTime_GMT)`)
 
 ggplot(power_monthly, aes(x=factor(`month(DateTime_GMT)`),group=1)) +
-  labs(x='Month', y='kW') +
+  labs(x='Month', y='kWh') +
   ggtitle("Global active power") +
-  geom_line(aes(y=reactive),size=1,color="blue1")+
+  geom_line(aes(y=active),size=1,color="blue1")+
   facet_grid(.~factor(`year(DateTime_GMT)`))+
   theme_dark()
 
 ggplot(power_monthly, aes(x=factor(`month(DateTime_GMT)`),group=1)) +
-  labs(x='Month', y='kW') +
+  labs(x='Month', y='kWh') +
   ggtitle("Global reactive power") +
   geom_line(aes(y=reactive),size=1,color="blue1")+
   facet_grid(.~factor(`year(DateTime_GMT)`))+
   theme_dark()
 
 ggplot(power_monthly, aes(x=factor(`month(DateTime_GMT)`),group=1)) +
-  labs(x='Month', y='Wh') +
+  labs(x='Month', y='kWh') +
   ggtitle("Energy consumption by different sub-meters") +
   geom_line(aes(y=sub_metering_1),size=1,color="blue1")+
   geom_line(aes(y=sub_metering_2),size=1,color="red1")+
@@ -135,56 +139,68 @@ ggplot(power_monthly, aes(x=factor(`month(DateTime_GMT)`),group=1)) +
   facet_grid(.~factor(`year(DateTime_GMT)`))+
   theme_dark()
 
-#split training and testing
-training_power_monthly <- power_monthly[1:34,]
-testing_power_monthly <- power_monthly[35:46,] #12 observations, to have one full cycle
+#all together, needs legend
+ggplot(power_monthly, aes(x=factor(`month(DateTime_GMT)`),group=1)) +
+  labs(x='Month', y='kWh') +
+  ggtitle("Energy consumption by different sub-meters") +
+  geom_line(aes(y=sub_metering_1),size=1,color="blue1")+
+  geom_line(aes(y=sub_metering_2),size=1,color="red1")+
+  geom_line(aes(y=sub_metering_3),size=1,color="green1")+
+  geom_line(aes(y=other),size=1,color="yellow1")+
+  geom_line(aes(y=active),size=1,color="violet")+
+  geom_line(aes(y=reactive),size=1,color="orange")+
+  facet_grid(.~factor(`year(DateTime_GMT)`))+
+  theme_dark()
 
 #time series
 power_monthly_TS <- ts(power_monthly[,3:8], frequency=12, start=c(2007,1))
-plot.ts(power_monthly_TS)
-training_monthly_TS <- ts(training_power_monthly[,3:8], frequency=12, start=c(2007,1))
-testing_monthly_TS <- ts(testing_power_monthly[,3:8], frequency=12, start=c(2009,11))
+autoplot(power_monthly_TS, facet=TRUE)
+ggseasonplot(power_monthly_TS[,1],year.labels=T) #overlays year, same all years
+ggseasonplot(power_monthly_TS[,1],polar=T) #round plot
+#comparison (GGally library)
+ggpairs(as.data.frame(power_monthly_TS)) #correlation between variables
 
+#split training and testing
+training_monthly_TS2 <- window(power_monthly_TS,start=c(2007,1),end=c(2009,10))
+testing_monthly_TS2 <- window(power_monthly_TS,start=c(2009,11))
+
+#--------------------------Forecasting global energy consumption----------------------------------------------------------
 #components for global active power
-training_active_monthly_components <- decompose(training_monthly_TS[,1]) #estimated variables: seasonal, trend and irregular 
-training_active_monthly_components$seasonal
-plot(training_active_monthly_components)
+active_monthly_components <- decompose(power_monthly_TS[,1]) #estimated variables: seasonal, trend and irregular 
+autoplot(active_monthly_components)
 
-#Holt-Winters Exponential Smoothing total active power
-#described by additive model, with increasing or decreasing trend and seasonality
-#short-term forecasts
-training_active_monthly_forecasts <- HoltWinters(training_monthly_TS[,1])
-training_active_monthly_forecasts
+#Holt-Winters 
+training_active_monthly_HW <- HoltWinters(training_monthly_TS2[,1])
+training_active_monthly_HW
 #alpha: 0 level based on both recent and past observations
 #beta: 0 slope of the trend based on past and recent observations
 #gamma: 0.18 seasonal component based on recent observations, only seasonal component is important
-plot(training_active_monthly_forecasts)
+plot(training_active_monthly_HW)
 #forecast
-testing_active_power_monthly <- testing_monthly_TS[,1]
-training_active_monthly_forecasts2 <- forecast(training_active_monthly_forecasts,h=12) #forecast next year
-plot(training_active_monthly_forecasts2) # 80% and 95% prediction interval
-lines(testing_active_power_monthly,col="red")
-accuracy(training_active_monthly_forecasts2,testing_active_power_monthly)
-Acf(training_active_monthly_forecasts2$residuals, lag.max=20)  #autocorrelation
-Pacf(training_active_monthly_forecasts2$residuals, lag.max=20) #partial autocorrelation
-plot.ts(activepower_monthly_forecasts2$residuals) # make a time plot, good???
-hist(activepower_monthly_forecasts2$residuals) # make a histogram, not exactly centered??
-checkresiduals(activepower_monthly_forecasts2)
+testing_active_power_monthly <- testing_monthly_TS2[,1]
+testing_active_monthly_HW_forecasts <- forecast(training_active_monthly_HW,h=12) #forecast testing
+autoplot(testing_active_monthly_HW_forecasts)+
+  autolayer(testing_active_power_monthly, series="True")
+checkresiduals(testing_active_monthly_HW_forecasts)
+accuracy(testing_active_monthly_HW_forecasts,testing_active_power_monthly)
+ #RMESE=83.04364, MAE=73.04880, MAPE=10.62258(relative error) MASE=0.7683290
+#check 80% and 95% confidence interval
+testing_active_monthly_HW_forecasts$upper-testing_active_monthly_HW_forecasts$lower
+#85%:265.6856 95%:406.331
 
 #Linear regression
-training_linear <- tslm(training_monthly_TS[,1] ~ trend + season)
-summary(training_linear)
-#Plot fitted vs actual
-training_linear_forecast <- forecast(training_linear,h=12) #forecast next year
-plot(training_linear_forecast) # 80% and 95% prediction interval
-lines(testing_active_power_monthly,col="red")
-accuracy(training_linear_forecast,testing_active_power_monthly)
-Acf(training_linear_forecast$residuals, lag.max=20)  #autocorrelation
-Pacf(training_linear_forecast$residuals, lag.max=20) #partial autocorrelation
-plot.ts(training_linear_forecast$residuals) # make a time plot, good???
-hist(training_linear_forecast$residuals) # make a histogram, not exactly centered??
+training_active_linear <- tslm(training_monthly_TS2[,1] ~ trend + season)
+summary(training_active_linear)
+#Forecast
+training_linear_forecast <- forecast(training_active_linear,h=12) #forecast next year
+autoplot(training_linear_forecast)+
+  autolayer(testing_active_power_monthly, series="True")
 checkresiduals(training_linear_forecast)
-#better the linear than the HoltWinters
+accuracy(training_linear_forecast,testing_active_power_monthly)
+#RMSE=69.95567 MAE=63.75385  MAPE=8.492804 MASE=0.6705645
+#check 80% and 95% confidence interval
+training_linear_forecast$upper-training_linear_forecast$lower
+#80%:310.5850 95%:488.1370
 
 #ARIMA model
 #differencing a Time Series, find d
@@ -194,21 +210,32 @@ plot.ts(training_diff) #still some stationary, OK, d=1
 Pacf(training_diff, lag.max=20) #p=1, p=0? significance lag8?
 #find q
 Acf(training_diff, lag.max=20) #q=0? just few in lag8
-#calculate automatically
-auto.arima(training_monthly_TS[,1],seasonal = TRUE) #(0,0,0)(0,1,0)
+#calculate automatically, need to be whole dataset 
+auto.arima(power_monthly_TS[,1],seasonal = TRUE) #(0,0,0)(1,1,0), needs to be the whole TS
 #arima model 
-training_active_monthly_arima <- arima(training_monthly_TS[,1], order=c(0,0,0), seasonal=c(0,1,0)) # fit an ARIMA(0,0,0)(0,1,0) model
+training_active_monthly_arima <- arima(training_monthly_TS2[,1], order=c(0,0,0), seasonal=c(1,1,0)) # fit an ARIMA(0,0,0)(1,1,0) model
 #forecast testing arima
 testing_active_monthly_arima <- forecast(training_active_monthly_arima,h=12) #forecast next year
-plot(testing_active_monthly_arima) # 80% and 95% prediction interval
-lines(testing_active_power_monthly,col="red")
-accuracy(testing_active_monthly_arima,testing_active_power_monthly)
-#Acf(testing_active_monthly_arima1$residuals, lag.max=20)  #autocorrelation
-#Pacf(testing_active_monthly_arima1$residuals, lag.max=20) #partial autocorrelation
-#plot.ts(testing_active_monthly_arima1$residuals) # make a time plot,no all seasonality
-#hist(testing_active_monthly_arima1$residuals) # make a histogram, 
+autoplot(testing_active_monthly_arima)+
+  autolayer(testing_active_power_monthly, series="True")
 checkresiduals(testing_active_monthly_arima)
+accuracy(testing_active_monthly_arima,testing_active_power_monthly)
+# RMSE=81.77564 MAE=71.46872 MAPE=10.003528 MASE=0.7517097
+#check 80% and 95% confidence interval
+testing_active_monthly_arima$upper-testing_active_monthly_arima$lower
+# 80%:233.2303 95%:356.6949
+
+#comparison 3 methods
+autoplot(power_monthly_TS[,1]) +
+  autolayer(testing_active_monthly_HW_forecasts, series="HoltWinters", PI=FALSE) +
+  autolayer(training_linear_forecast, series="Linear Regression", PI=FALSE) +
+  autolayer(testing_active_monthly_arima, series="ARIMA", PI=FALSE) +
+  xlab("Year") + ylab("kWh") +
+  ggtitle("Forecasts for monthly energy consumption") +
+  guides(colour=guide_legend(title="Forecast"))
+#linear regression best error metrics, but ARIMA narrower confidence
 
 
-##best model is the linear regression
+
+#------------------------Forecasting monthly global reactive energy consumption--------------------------------------
 
