@@ -14,7 +14,7 @@ library(VIM)
 library(httr)
 cat(content(GET("https://raw.githubusercontent.com/iascchen/VisHealth/master/R/calendarHeat.R"), "text"), file="calendarHeat.R")
 source("calendarHeat.R")
-
+library(opera)
 
 #Download dataset
 power <- read_delim('household_power_consumption.txt', col_names = TRUE,delim=';',na='?') 
@@ -103,15 +103,15 @@ anyNA(power)
 #forecast global active energy, forecast global reactive energy, forecast sub-meter 3
 
 #Prepare data
-power[,1:2] <- power[ ,1:2]*(1000/60) #change un its to Wh
+power[,1:2] <- power[ ,1:2]*(1000/60) #change units to Wh
 power <- mutate(power,Other = (Global_active_power - Sub_metering_1 - Sub_metering_2 - Sub_metering_3))
 #new variable with the energy consumption that is not detected by the sub-meters
 
 power_monthly <- power %>%
   filter (DateTime_GMT>=ymd_hms(20070101000000) & DateTime_GMT<=ymd_hms(20101031235900)) %>% #only take complete months
   group_by(month(DateTime_GMT),year(DateTime_GMT)) %>%
-  summarise(active=sum(Global_active_power)/1000,reactive=sum(Global_reactive_power)/1000, #Kw can add
-            sub_metering_1=sum(Sub_metering_1)/1000,sub_metering_2=sum(Sub_metering_2)/1000, #Wh is average because has time unit
+  summarise(active=sum(Global_active_power)/1000,reactive=sum(Global_reactive_power)/1000, 
+            sub_metering_1=sum(Sub_metering_1)/1000,sub_metering_2=sum(Sub_metering_2)/1000, 
             sub_metering_3=sum(Sub_metering_3)/1000, other=sum(Other)/1000) %>%
   arrange(`year(DateTime_GMT)`,`month(DateTime_GMT)`)
 
@@ -183,7 +183,7 @@ autoplot(testing_active_monthly_HW_forecasts)+
   autolayer(testing_active_power_monthly, series="True")
 checkresiduals(testing_active_monthly_HW_forecasts)
 accuracy(testing_active_monthly_HW_forecasts,testing_active_power_monthly)
- #RMESE=83.04364, MAE=73.04880, MAPE=10.62258(relative error) MASE=0.7683290
+ #RMSE=83.04364, MAE=73.04880, MAPE=10.62258(relative error) MASE=0.7683290
 #check 80% and 95% confidence interval
 testing_active_monthly_HW_forecasts$upper-testing_active_monthly_HW_forecasts$lower
 #85%:265.6856 95%:406.331
@@ -233,9 +233,365 @@ autoplot(power_monthly_TS[,1]) +
   xlab("Year") + ylab("kWh") +
   ggtitle("Forecasts for monthly energy consumption") +
   guides(colour=guide_legend(title="Forecast"))
-#linear regression best error metrics, but ARIMA narrower confidence
+#linear regression best error metrics, but ARIMA narrower confidence, use ARIMA (0,0,0)(1,1,0)
 
-
+#Forecasting with ARIMA Model
+active_monthly_arima <- arima(power_monthly_TS[,1], order=c(0,0,0), seasonal=c(1,1,0)) # fit an ARIMA(0,0,0)(1,1,0) model
+active_monthly_arima_forecast <- forecast(active_monthly_arima,h=12) #forecast next year
+autoplot(active_monthly_arima_forecast)
+checkresiduals(active_monthly_arima_forecast)
+accuracy(active_monthly_arima_forecast)
+# RMSE=78.34517 MAE=53.1985 MAPE=9.060036 MASE=0.5854239
+#check 80% and 95% confidence interval
+active_monthly_arima_forecast$upper-active_monthly_arima_forecast$lower
+# 80%:233 95%:357
 
 #------------------------Forecasting monthly global reactive energy consumption--------------------------------------
+#components for global active power
+reactive_monthly_components <- decompose(power_monthly_TS[,2]) #estimated variables: seasonal, trend and irregular 
+autoplot(reactive_monthly_components)
+
+#Holt-Winters 
+training_reactive_monthly_HW <- HoltWinters(training_monthly_TS2[,2])
+training_reactive_monthly_HW
+#alpha: 0 level based on both recent and past observations
+#beta: 0 slope of the trend based on past and recent observations
+#gamma: 1 seasonal component based on recent observations,
+plot(training_reactive_monthly_HW)
+#forecast
+testing_reactive_power_monthly <- testing_monthly_TS2[,2]
+testing_reactive_monthly_HW_forecasts <- forecast(training_reactive_monthly_HW,h=12) #forecast testing
+autoplot(testing_reactive_monthly_HW_forecasts)+
+  autolayer(testing_reactive_power_monthly, series="True")
+checkresiduals(testing_reactive_monthly_HW_forecasts)
+accuracy(testing_reactive_monthly_HW_forecasts,testing_reactive_power_monthly)
+#RMESE=23.20108 MAE=14.993927 MAPE=17.41535 MASE=1.0535130
+#check 80% and 95% confidence interval
+testing_reactive_monthly_HW_forecasts$upper-testing_reactive_monthly_HW_forecasts$lower
+#85%:35.96249 95%54.99989
+
+#Linear regression
+training_reactive_linear <- tslm(training_monthly_TS2[,2] ~ trend + season)
+summary(training_reactive_linear)
+#Forecast
+training_reactive_linear_forecast <- forecast(training_reactive_linear,h=12) #forecast next year
+autoplot(training_reactive_linear_forecast)+
+  autolayer(testing_reactive_power_monthly, series="True")
+checkresiduals(training_reactive_linear_forecast)
+accuracy(training_reactive_linear_forecast,testing_reactive_power_monthly)
+#RMSE=14.74467 MAE=10.991128 MAPE=12.65401 MASE=0.7722658
+#check 80% and 95% confidence interval
+training_reactive_linear_forecast$upper-training_reactive_linear_forecast$lower
+#80%:46.9 95%:74
+
+#ARIMA model
+#calculate automatically
+auto.arima(power_monthly_TS[,2],seasonal = TRUE) #(0,0,1)(0,0,1), needs to be the whole TS
+#arima model 
+training_reactive_monthly_arima <- arima(training_monthly_TS2[,2], order=c(0,0,1), seasonal=c(0,0,1)) 
+testing_reactive_monthly_arima <- forecast(training_reactive_monthly_arima,h=12) #forecast next year
+autoplot(testing_reactive_monthly_arima)+
+  autolayer(testing_reactive_power_monthly, series="True")
+checkresiduals(testing_reactive_monthly_arima)
+accuracy(testing_reactive_monthly_arima,testing_reactive_power_monthly)
+# RMSE=15.77356 MAE=12.389232 MAPE=13.81878 MASE=0.8705002
+#check 80% and 95% confidence interval
+testing_reactive_monthly_arima$upper-testing_reactive_monthly_arima$lower
+# 80%: 36.43344 95%:55.46
+
+#comparison 3 methods
+autoplot(power_monthly_TS[,2]) +
+  autolayer(testing_reactive_monthly_HW_forecasts, series="HoltWinters", PI=FALSE) +
+  autolayer(training_reactive_linear_forecast, series="Linear Regression", PI=FALSE) +
+  autolayer(testing_reactive_monthly_arima, series="ARIMA", PI=FALSE) +
+  xlab("Year") + ylab("kWh") +
+  ggtitle("Forecasts for monthly energy consumption") +
+  guides(colour=guide_legend(title="Forecast"))
+#linear regression best error metrics, but ARIMA narrower confidence.
+#linear regression real data are inside the confidence intervals, use linear regression
+
+#combine models linear regression and ARIMA with opera package
+reactive_models <- cbind(ARIMA=testing_reactive_monthly_arima$mean, LR=training_reactive_linear_forecast$mean)
+MLpol0_reactive <- mixture(model = "MLpol", loss.type = "square")
+weights_reactive <- predict(MLpol0_reactive, reactive_models, testing_monthly_TS2[,2], type='weights') #to see the wheight of each model
+reactive_forecast <- ts(predict(MLpol0_reactive, reactive_models, testing_monthly_TS2[,2], type='response'), start=c(2009,11), freq=12)
+autoplot(power_monthly_TS[,2]) +
+  autolayer(testing_reactive_monthly_HW_forecasts, series="HoltWinters", PI=FALSE) +
+  autolayer(training_reactive_linear_forecast, series="Linear Regression", PI=FALSE) +
+  autolayer(testing_reactive_monthly_arima, series="ARIMA", PI=FALSE) +
+  autolayer(reactive_forecast, series="mixture")+
+  xlab("Year") + ylab("kWh") +
+  ggtitle("Forecasts for monthly energy consumption") +
+  guides(colour=guide_legend(title="Forecast"))
+
+#Forecasting with linear regression
+reactive_linear <- tslm(power_monthly_TS[,2] ~ trend + season)
+summary(reactive_linear)
+#Forecast
+reactive_linear_forecast <- forecast(reactive_linear,h=12) #forecast next year
+autoplot(reactive_linear_forecast)
+checkresiduals(reactive_linear_forecast)
+accuracy(reactive_linear_forecast)
+#RMSE=11.3821 MAE=8.893866 MAPE=9.967836 MASE=0.5989381
+#check 80% and 95% confidence interval
+reactive_linear_forecast$upper-reactive_linear_forecast$lower
+#80%:42 95%:65
+
+#Forecasting with ARIMA
+reactive_monthly_arima <- arima(power_monthly_TS[,2], order=c(0,0,1), seasonal=c(0,0,1)) 
+reactive_monthly_arima_forecast <- forecast(reactive_monthly_arima,h=12) #forecast next year
+autoplot(reactive_monthly_arima_forecast)
+accuracy(reactive_monthly_arima_forecast)
+# RMSE=12.48428 MAE=9.79477 MAPE=11. MASE=0.6596075
+#check 80% and 95% confidence interval
+reactive_monthly_arima_forecast$upper-reactive_monthly_arima_forecast$lower
+# 80%: 38 95%:59
+
+
+#mix models?????
+
+
+
+#------------------------Forecasting monthly sub-meter3 energy consumption--------------------------------------
+#components for sub-meter3
+meter3_monthly_components <- decompose(power_monthly_TS[,5]) #estimated variables: seasonal, trend and irregular 
+autoplot(meter3_monthly_components)
+
+#Holt-Winters 
+training_meter3_monthly_HW <- HoltWinters(training_monthly_TS2[,5])
+training_meter3_monthly_HW
+#alpha: 0 level based on both recent and past observations
+#beta: 0 slope of the trend based on past and recent observations
+#gamma: 0.445 seasonal component based on recent observations,
+plot(training_meter3_monthly_HW)
+#forecast
+testing_meter3_power_monthly <- testing_monthly_TS2[,5]
+testing_meter3_monthly_HW_forecasts <- forecast(training_meter3_monthly_HW,h=12) #forecast testing
+autoplot(testing_meter3_monthly_HW_forecasts)+
+  autolayer(testing_meter3_power_monthly, series="True")
+checkresiduals(testing_meter3_monthly_HW_forecasts)
+accuracy(testing_meter3_monthly_HW_forecasts,testing_meter3_power_monthly)
+#RMSE=44.0321 MAE=33.93463 MAPE=12.05935 MASE=0.7012322
+#check 80% and 95% confidence interval
+testing_meter3_monthly_HW_forecasts$upper-testing_meter3_monthly_HW_forecasts$lower
+#85%:116.1997 95%177.7121
+
+#Linear regression
+training_meter3_linear <- tslm(training_monthly_TS2[,5] ~ trend + season)
+summary(training_meter3_linear)
+#Forecast
+training_meter3_linear_forecast <- forecast(training_meter3_linear,h=12) #forecast next year
+autoplot(training_meter3_linear_forecast)+
+  autolayer(testing_meter3_power_monthly, series="True")
+checkresiduals(training_meter3_linear_forecast)
+accuracy(training_meter3_linear_forecast,testing_meter3_power_monthly)
+#RMSE=41.76438 MAE=35.05885 MAPE=12.23261 MASE=0.724463
+#check 80% and 95% confidence interval
+training_meter3_linear_forecast$upper-training_meter3_linear_forecast$lower
+#80%:131 95%:205
+
+#ARIMA model
+#calculate automatically
+auto.arima(power_monthly_TS[,5],seasonal = TRUE) #(0,0,0)(1,1,0), needs to be the whole TS
+#arima model 
+training_meter3_monthly_arima <- arima(training_monthly_TS2[,5], order=c(0,0,0), seasonal=c(1,1,0)) 
+testing_meter3_monthly_arima <- forecast(training_meter3_monthly_arima,h=12) #forecast next year
+autoplot(testing_meter3_monthly_arima)+
+  autolayer(testing_meter3_power_monthly, series="True")
+checkresiduals(testing_meter3_monthly_arima)
+accuracy(testing_meter3_monthly_arima,testing_meter3_power_monthly)
+# RMSE=55.30034 MAE=44.46019 MAPE=13.24964 MASE=0.9187345
+#check 80% and 95% confidence interval
+testing_meter3_monthly_arima$upper-testing_meter3_monthly_arima$lower
+# 80%: 137 95%:209
+
+#comparison 3 methods
+autoplot(power_monthly_TS[,5]) +
+  autolayer(testing_meter3_monthly_HW_forecasts, series="HoltWinters", PI=FALSE) +
+  autolayer(training_meter3_linear_forecast, series="Linear Regression", PI=FALSE) +
+  autolayer(testing_meter3_monthly_arima, series="ARIMA", PI=FALSE) +
+  xlab("Year") + ylab("kWh") +
+  ggtitle("Forecasts for monthly energy consumption") +
+  guides(colour=guide_legend(title="Forecast"))
+#Holt-Winters better metrics and narrower confidence interval
+
+#Forecasting with Holt-Winters
+meter3_monthly_HW <- HoltWinters(power_monthly_TS[,5])
+meter3_monthly_HW
+#alpha: 0 level based on both recent and past observations
+#beta: 0 slope of the trend based on past and recent observations
+#gamma: 0.54 seasonal component based on recent observations, changed a little from the training
+plot(meter3_monthly_HW)
+meter3_monthly_HW_forecasts <- forecast(meter3_monthly_HW,h=12) #forecast testing
+autoplot(meter3_monthly_HW_forecasts)
+checkresiduals(testing_meter3_monthly_HW_forecasts)
+accuracy(meter3_monthly_HW_forecasts)
+#RMSE=44.11075 MAE=32.57227 MAPE=15.84121 MASE=0.6933442
+#check 80% and 95% confidence interval
+meter3_monthly_HW_forecasts$upper-meter3_monthly_HW_forecasts$lower
+#85%:114.546 95%:175.183
+
+#------------------------Forecasting monthly sub-meter1 energy consumption--------------------------------------
+#components for sub-meter1
+meter1_monthly_components <- decompose(power_monthly_TS[,3]) #estimated variables: seasonal, trend and irregular 
+autoplot(meter1_monthly_components)
+
+#Holt-Winters 
+training_meter1_monthly_HW <- HoltWinters(training_monthly_TS2[,3])
+training_meter1_monthly_HW
+#alpha: 0 level based on both recent and past observations
+#beta: 0 slope of the trend based on past and recent observations
+#gamma: 0 seasonal component based on past observations,
+plot(training_meter1_monthly_HW)
+#forecast
+testing_meter1_power_monthly <- testing_monthly_TS2[,3]
+testing_meter1_monthly_HW_forecasts <- forecast(training_meter1_monthly_HW,h=12) #forecast testing
+autoplot(testing_meter1_monthly_HW_forecasts)+
+  autolayer(testing_meter1_power_monthly, series="True")
+checkresiduals(testing_meter1_monthly_HW_forecasts)
+accuracy(testing_meter1_monthly_HW_forecasts,testing_meter1_power_monthly)
+#RMSE=12.26473 MAE=10.097473 MAPE=31.65231 MASE=0.8160294
+#check 80% and 95% confidence interval
+testing_meter1_monthly_HW_forecasts$upper-testing_meter1_monthly_HW_forecasts$lower
+#85%:36 95%:56
+
+#Linear regression
+training_meter1_linear <- tslm(training_monthly_TS2[,3] ~ trend + season)
+summary(training_meter1_linear)
+#Forecast
+training_meter1_linear_forecast <- forecast(training_meter1_linear,h=12) #forecast next year
+autoplot(training_meter1_linear_forecast)+
+  autolayer(testing_meter1_power_monthly, series="True")
+checkresiduals(training_meter1_linear_forecast)
+accuracy(training_meter1_linear_forecast,testing_meter1_power_monthly)
+#RMSE=10.988005 MAE=9.358829 MAPE=27.74643 MASE=0.7563357
+#check 80% and 95% confidence interval
+training_meter1_linear_forecast$upper-training_meter1_linear_forecast$lower
+#80%:41 95%:65
+
+#ARIMA model
+#calculate automatically
+auto.arima(power_monthly_TS[,3],seasonal = TRUE) #(0,0,0)(1,0,0), needs to be the whole TS
+#arima model 
+training_meter1_monthly_arima <- arima(training_monthly_TS2[,3], order=c(0,0,0), seasonal=c(1,0,0)) 
+testing_meter1_monthly_arima <- forecast(training_meter1_monthly_arima,h=12) #forecast next year
+autoplot(testing_meter1_monthly_arima)+
+  autolayer(testing_meter1_power_monthly, series="True")
+checkresiduals(testing_meter1_monthly_arima)
+accuracy(testing_meter1_monthly_arima,testing_meter1_power_monthly)
+# RMSE=15.62575 MAE=12.44513 MAPE=48.71549 MASE=1.0057554
+#check 80% and 95% confidence interval
+testing_meter1_monthly_arima$upper-testing_meter1_monthly_arima$lower
+# 80%: 35 95%:53
+
+#comparison 3 methods
+autoplot(power_monthly_TS[,3]) +
+  autolayer(testing_meter1_monthly_HW_forecasts, series="HoltWinters", PI=FALSE) +
+  autolayer(training_meter1_linear_forecast, series="Linear Regression", PI=FALSE) +
+  autolayer(testing_meter1_monthly_arima, series="ARIMA", PI=FALSE) +
+  xlab("Year") + ylab("kWh") +
+  ggtitle("Forecasts for monthly energy consumption") +
+  guides(colour=guide_legend(title="Forecast"))
+
+#combine models with opera package
+meter1_models <- cbind(HW=testing_meter1_monthly_HW_forecasts$mean, ARIMA=testing_meter1_monthly_arima$mean, LR=training_meter1_linear_forecast$mean)
+MLpol0_meter1 <- mixture(model = "MLpol", loss.type = "square")
+weights_meter1 <- predict(MLpol0_meter1, meter1_models, testing_monthly_TS2[,3], type='weights') #to see the wheight of each model
+meter1_forecast <- ts(predict(MLpol0_meter1, meter1_models, testing_monthly_TS2[,3], type='response'), start=c(2009,11), freq=12)
+autoplot(power_monthly_TS[,3]) +
+  autolayer(meter1_forecast, series="mixture")+
+  autolayer(testing_meter1_monthly_HW_forecasts, series="HoltWinters", PI=FALSE) +
+  autolayer(training_meter1_linear_forecast, series="Linear Regression", PI=FALSE) +
+  autolayer(testing_meter1_monthly_arima, series="ARIMA", PI=FALSE) 
+#no much improve, use HW
+
+meter1_monthly_HW <- HoltWinters(power_monthly_TS[,3])
+meter1_monthly_HW
+#alpha: 0 level based on both recent and past observations
+#beta: 0 slope of the trend based on past and recent observations
+#gamma: 0.20 seasonal component based on past and recent observations,
+plot(meter1_monthly_HW)
+meter1_monthly_HW_forecasts <- forecast(meter1_monthly_HW,h=12) #forecast testing
+autoplot(meter1_monthly_HW_forecasts)
+checkresiduals(meter1_monthly_HW_forecasts)
+accuracy(meter1_monthly_HW_forecasts)
+#RMSE=13.1304 MAE=10.04051 MAPE=47.1713 MASE=0.778721
+#check 80% and 95% confidence interval
+meter1_monthly_HW_forecasts$upper-meter1_monthly_HW_forecasts$lower
+#85%:34 95%:52
+
+#------------------------Forecasting monthly sub-meter2 energy consumption--------------------------------------
+#components for sub-meter2
+meter2_monthly_components <- decompose(power_monthly_TS[,4]) #estimated variables: seasonal, trend and irregular 
+autoplot(meter2_monthly_components)
+
+#Holt-Winters 
+training_meter2_monthly_HW <- HoltWinters(training_monthly_TS2[,4])
+training_meter2_monthly_HW
+#alpha: 0.1 level based on both recent and past observations
+#beta: 0 slope of the trend based on past and recent observations
+#gamma: 0 seasonal component based on past observations,
+plot(training_meter2_monthly_HW)
+#forecast
+testing_meter2_power_monthly <- testing_monthly_TS2[,4]
+testing_meter2_monthly_HW_forecasts <- forecast(training_meter2_monthly_HW,h=12) #forecast testing
+autoplot(testing_meter2_monthly_HW_forecasts)+
+  autolayer(testing_meter2_power_monthly, series="True")
+checkresiduals(testing_meter2_monthly_HW_forecasts)
+accuracy(testing_meter2_monthly_HW_forecasts,testing_meter2_power_monthly)
+#RMSE=16.06957 MAE=13.86413 MAPE=30.63604 MASE=0.7745400
+#check 80% and 95% confidence interval
+testing_meter2_monthly_HW_forecasts$upper-testing_meter2_monthly_HW_forecasts$lower
+#85%:36 95%:55
+
+#Linear regression
+training_meter2_linear <- tslm(training_monthly_TS2[,4] ~ trend + season)
+summary(training_meter2_linear)
+#Forecast
+training_meter2_linear_forecast <- forecast(training_meter2_linear,h=12) #forecast next year
+autoplot(training_meter2_linear_forecast)+
+  autolayer(testing_meter2_power_monthly, series="True")
+checkresiduals(training_meter2_linear_forecast)
+accuracy(training_meter2_linear_forecast,testing_meter2_power_monthly)
+#RMSE=11.74129 MAE=10.481984 MAPE=22.85991 MASE=0.5855917
+#check 80% and 95% confidence interval
+training_meter2_linear_forecast$upper-training_meter2_linear_forecast$lower
+#80%:43 95%:68
+
+#ARIMA model
+#calculate automatically
+auto.arima(power_monthly_TS[,4],seasonal = TRUE) #(2,1,0)(1,0,0), needs to be the whole TS
+#arima model 
+training_meter2_monthly_arima <- arima(training_monthly_TS2[,4], order=c(2,1,0), seasonal=c(1,0,0)) 
+testing_meter2_monthly_arima <- forecast(training_meter2_monthly_arima,h=12) #forecast next year
+autoplot(testing_meter2_monthly_arima)+
+  autolayer(testing_meter2_power_monthly, series="True")
+checkresiduals(testing_meter2_monthly_arima)
+accuracy(testing_meter2_monthly_arima,testing_meter2_power_monthly)
+# RMSE=10.26684  MAE=8.940694 MAPE=22.52793 MASE=0.4994852
+#check 80% and 95% confidence interval
+testing_meter2_monthly_arima$upper-testing_meter2_monthly_arima$lower
+# 80%: 72 95%:111
+
+#comparison 3 methods
+autoplot(power_monthly_TS[,4]) +
+  autolayer(testing_meter2_monthly_HW_forecasts, series="HoltWinters", PI=FALSE) +
+  autolayer(training_meter2_linear_forecast, series="Linear Regression", PI=FALSE) +
+  autolayer(testing_meter2_monthly_arima, series="ARIMA", PI=FALSE) +
+  xlab("Year") + ylab("kWh") +
+  ggtitle("Forecasts for monthly energy consumption") +
+  guides(colour=guide_legend(title="Forecast"))
+
+#Choose linear regression
+meter2_linear <- tslm(power_monthly_TS[,4] ~ trend + season)
+summary(meter2_linear)
+#Forecast
+meter2_linear_forecast <- forecast(meter2_linear,h=12) #forecast next year
+autoplot(meter2_linear_forecast)
+checkresiduals(meter2_linear_forecast)
+accuracy(meter2_linear_forecast)
+#RMSE=9.488194 MAE=7.224636 MAPE=14.93769 MASE=0.4743367
+#check 80% and 95% confidence interval
+meter2_linear_forecast$upper-meter2_linear_forecast$lower
+#80%:34 95%:53
 
