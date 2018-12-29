@@ -2,9 +2,10 @@
 #Lara Cobler Moncunill
 #21 December 2018
 
-library(flexdashboard)
+library(flexdashboard) #for gauge plot
 library(shiny)
 require(shinydashboard)
+library(shinyWidgets) #fancy widgets
 library(ggplot2)
 library(dplyr)
 library(lubridate)
@@ -50,6 +51,14 @@ power_monthly <- power %>%
             sub_metering_1=sum(Sub_metering_1)/1000,sub_metering_2=sum(Sub_metering_2)/1000,
             sub_metering_3=sum(Sub_metering_3)/1000, other=sum(Other)/1000) %>%
   arrange(`year(DateTime_GMT)`,`month(DateTime_GMT)`)
+#data manipulation for the dayly summary
+power_dayly <- power %>%
+  group_by(day(DateTime_GMT),month(DateTime_GMT),year(DateTime_GMT)) %>%
+  summarise(Total=sum(Global_active_power)/1000,Reactive=sum(Global_reactive_power)/1000,
+            Kitchen=sum(Sub_metering_1)/1000,"Laundry room"=sum(Sub_metering_2)/1000,
+            "Boiler+AC"=sum(Sub_metering_3)/1000, Other=sum(Other)/1000) %>%
+  gather(Meter, kWh, "Kitchen", "Laundry room","Boiler+AC","Other","Total","Reactive") %>%
+  arrange(`year(DateTime_GMT)`,`month(DateTime_GMT)`,`day(DateTime_GMT)`)
 #Forecast active power
 power_monthly_TS <- ts(power_monthly[2:47,3:8], frequency=12, start=c(2007,1))
 active_monthly_arima <- arima(power_monthly_TS[,1], order=c(0,0,0), seasonal=c(1,1,0)) # fit an ARIMA(0,0,0)(1,1,0) model
@@ -57,130 +66,167 @@ active_monthly_arima_forecast <- forecast(active_monthly_arima,h=12) #forecast n
 
 #----------------------user interface-------------------------------------------
 #Dashboard header carrying the title of the dashboard
-header <- dashboardHeader(title = "User Energy Consumption")
+header <- dashboardHeader(title = "User Dashboard")
+
 #Sidebar content of the dashboard
 sidebar <- dashboardSidebar(
-sidebarMenu(
-menuItem("Dashboard", tabName = "dashboard", icon = icon("dashboard"))
-)
-)
+  sidebarMenu(
+    menuItem("Dashboard", tabName = "dashboard", icon = icon("dashboard"))
+    )
+  )
 
 #Select month and year on top
 frow0 <- fluidRow(
-#  column (width=3, h1("Monthly summary")),
-column (width=2, selectInput(
-inputId = "selectmonth", label="Select month",
-list("January"=1,"February"=2,"March"=3,"April"=4,"May"=5, "June"=6,
-"July"=7, "August"=8, "September"=9,"October"=10,"November"=11,"December"=12),
-selected = tail(power_monthly$`month(DateTime_GMT)`,1)
-)),
-column (width=2, selectInput(
-inputId = "selectyear", label="Select year",
-list(2006,2007,2008,2009,2010),
-selected= tail(power_monthly$`year(DateTime_GMT)`,1)
-))
-)
-
-#gauge plot and value boxes on top
+  column (width=2, selectInput(
+    inputId = "selectmonth", label="Select month",
+    list("January"=1,"February"=2,"March"=3,"April"=4,"May"=5, "June"=6,
+         "July"=7, "August"=8, "September"=9,"October"=10,"November"=11,"December"=12),
+    selected = tail(power_monthly$`month(DateTime_GMT)`,1)
+    )),
+  column (width=2, selectInput(
+    inputId = "selectyear", label="Select year",
+    list(2006,2007,2008,2009,2010),
+    selected= tail(power_monthly$`year(DateTime_GMT)`,1)
+    ))
+  )
+#gauge plot and value boxes in the middle
 frow1 <- fluidRow( #aligned boxes on top
-box(
-title="Total energy consumed",
-#status = "primary", #determines background color
-background="navy",
-solidHeader = TRUE,
-width = 4,
-height="170px",
-gaugeOutput("gaugeKwh")
-),
-tags$head(tags$style(HTML(".small-box {height: 170px}"))),
-valueBoxOutput("cost"),
-valueBoxOutput("co2")
-#  valueBoxOutput("peak",width=NULL)
-)
-
+  box(
+    title="Total energy consumed",
+    background="navy",
+    solidHeader = TRUE,
+    width = 3,
+    height="170px",
+    gaugeOutput("gaugeKwh")
+    ),
+  tags$head(tags$style(HTML(".small-box {height: 170px}"))), #size value box equal to gauge box (170px)
+  valueBoxOutput("cost", width=3),
+  valueBoxOutput("co2", width=3),
+  valueBoxOutput("peak", width=3)
+  )
+#plots at the bottom
 frow2 <- fluidRow( #aligned plots
-box(
-title="Energy consumption",
-status = "primary", #determines background color
-solidHeader = TRUE,
-collapsible = TRUE,
-width = 8,
-plotOutput("consumption",height="300px")
-),
-box(
-title="Energy Consumption",
-status="primary",
-solidHeader = TRUE,
-collapsible = TRUE,
-#  background =  "maroon",
-width = 4,
-plotOutput("meters", height = "300px")
-)
-)
-
-#combine the two fluid rows to make the body
+  box(
+    title="Energy consumption",
+    status = "primary", #determines background color
+    solidHeader = TRUE,
+    width = 8,
+    checkboxGroupButtons(
+      inputId = "selectMeter", #label = "Select a meter :", 
+      choices = c("Kitchen", "Laundry room", "Boiler+AC", "Other", "Total", "Reactive"), 
+      justified = TRUE, status = "primary",
+      checkIcon = list(yes = icon("ok", lib = "glyphicon"), no = icon("remove", lib = "glyphicon")),
+      selected="Total"
+    ),
+    plotOutput("consumption",height="300px")
+    ),
+  box(
+    title="Energy Consumption",
+    status="primary",
+    solidHeader = TRUE,
+    width = 4, height="414px",
+    plotOutput("meters", height = "350px")
+    )
+  )
+#combine the fluid rows to make the body
 body <- dashboardBody(h1("Monthly summary"),frow0,frow1,frow2)
 ui <- dashboardPage(
-title = "Energy consumption", #title of the browser page
-header, sidebar, body,
-skin="red"
-)
+  title = "Energy consumption", #title of the browser page
+  header, sidebar, body,
+  skin="red"
+  )
 
+#---------------------------------------------server-----------------------------------------------
 server <- function(input, output) {
+  
 #data manipulation for the monthly summary
-selectedMonth <- reactive({ power_monthly %>%
-filter((`month(DateTime_GMT)`== input$selectmonth) & (`year(DateTime_GMT)`== input$selectyear))
-})
+  selectedMonth <- reactive({ power_monthly %>%
+      filter((`month(DateTime_GMT)`== input$selectmonth) & (`year(DateTime_GMT)`== input$selectyear))
+    })
 
+#data manioulation for monthly summary dayly plot
+  selectedMonth_dayly <- reactive ({
+    power_dayly %>% filter((`month(DateTime_GMT)`== input$selectmonth) & (`year(DateTime_GMT)`== input$selectyear) &
+                             (Meter %in% input$selectMeter))
+  })
+  
 output$gaugeKwh = renderGauge({  #if to change the previous months
-kwh_selectedMonth <- selectedMonth()
-gauge(round(kwh_selectedMonth$active),
-symbol="kWh",
-min = 0,
-max = round( active_monthly_arima_forecast$mean[1]),
-sectors = gaugeSectors(success = c(0,0.3*(active_monthly_arima_forecast$mean[1])),
-warning = c(0.3*(active_monthly_arima_forecast$mean[1]),0.6*(active_monthly_arima_forecast$mean[1])),
-danger =  c(0.6*(active_monthly_arima_forecast$mean[1]),active_monthly_arima_forecast$mean[1])))
-})
+  kwh_selectedMonth <- selectedMonth()
+  gauge(round(kwh_selectedMonth$active),
+        symbol="kWh",
+        min = 0,
+        max = round( active_monthly_arima_forecast$mean[1]),
+        sectors = gaugeSectors(success = c(0,0.3*(active_monthly_arima_forecast$mean[1])),
+        warning = c(0.3*(active_monthly_arima_forecast$mean[1]),0.6*(active_monthly_arima_forecast$mean[1])),
+        danger =  c(0.6*(active_monthly_arima_forecast$mean[1]),active_monthly_arima_forecast$mean[1])))
+  })
 
 output$cost <- renderValueBox({
-cost_selectedMonth <- selectedMonth()
-cost_selectedMonth <- cost_selectedMonth$active * 0.0135
-valueBox(
-round(cost_selectedMonth,2),
-"Expected cost",
-icon=icon("euro", lib="glyphicon"),
-color = "yellow"
-)
-})
+  cost_selectedMonth <- selectedMonth()
+  cost_selectedMonth <- cost_selectedMonth$active * 0.0135
+  valueBox(
+    round(cost_selectedMonth,2), #large number
+    "Monthly calculated cost", #subtitle
+    icon=icon("euro", lib="glyphicon"), 
+    color = "yellow"
+    )
+  })
 
 output$co2 <- renderValueBox({
-co2_selectedMonth <- selectedMonth()
-co2_selectedMonth <- co2_selectedMonth$active * 80/1000 #in 2010 in france 80g/kWh
-valueBox(
-paste(round(co2_selectedMonth,2),"Kg"),
-"Expected CO2 emission",
-icon=icon("fas fa-leaf"),
-color = "green"
-)
-})
+  co2_selectedMonth <- selectedMonth()
+  co2_selectedMonth <- co2_selectedMonth$active * 80/1000 #in 2010 in france 80g/kWh
+  valueBox(
+    paste(round(co2_selectedMonth,2),"Kg"),
+    "Monthly calculated CO2 emission",
+    icon=icon("fas fa-leaf"),
+    color = "green"
+    )
+  })
+
+output$peak <- renderValueBox({
+  peak_selectedMonth <- selectedMonth()
+  if (peak_selectedMonth$`month(DateTime_GMT)` >= 4 & peak_selectedMonth$`month(DateTime_GMT)` <= 9){
+    peak_season = "11am - 3pm"
+  } else {
+    peak_season = "6pm - 9pm"
+  }
+  valueBox(
+    peak_season,
+    "Peak electricity demand",
+    icon=icon("time", lib="glyphicon"),
+    color = "purple"
+    )
+  })
 
 output$meters <- renderPlot({
-meters_selectedMonth <- selectedMonth()
-#Gather the sub-meters to help with the further visualization
-meters_selectedMonth <- meters_selectedMonth %>% gather(Meter, kWh, "sub_metering_1", "sub_metering_2","sub_metering_3","other")
-ggplot(data=meters_selectedMonth,
-aes(x=reorder(Meter,kWh),y=kWh,fill=factor(Meter)))+
-geom_bar(stat="identity")+
-coord_flip() +
-labs(y='kWh') +
-theme(legend.position = "none", axis.title.y=element_blank(), axis.title.x = element_text(face="bold",size=10),
-axis.text.x = element_text(size=10), axis.text.y = element_text(face="bold",size=10), axis.ticks.y = element_blank(),
-panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
-panel.background = element_blank())+
-scale_x_discrete(labels=c("other"="Other", "sub_metering_1"="Kitchen","sub_metering_2"="Laundry","sub_metering_3"="Boiler+AC"))
-#change color background and add value to bars, y labels
+  meters_selectedMonth <- selectedMonth()
+  #Gather the sub-meters to help with the further visualization
+  meters_selectedMonth <- meters_selectedMonth %>% gather(Meter, kWh, "sub_metering_1", "sub_metering_2","sub_metering_3","other")
+  ggplot(data=meters_selectedMonth,
+         aes(x=reorder(Meter,kWh),y=kWh,fill=factor(Meter)))+
+    geom_bar(stat="identity")+
+    coord_flip() +
+    labs(y='kWh') +
+    theme(legend.position = "none", axis.title.y=element_blank(), axis.title.x = element_text(face="bold",size=10),
+          axis.text.x = element_text(size=10), axis.text.y = element_text(face="bold",size=10), axis.ticks.y = element_blank(),
+          panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank())+
+    scale_x_discrete(labels=c("other"="Other", "sub_metering_1"="Kitchen","sub_metering_2"="Laundry","sub_metering_3"="Boiler+AC"))
+  })
+
+output$consumption <- renderPlot({
+  meters_dayly <- selectedMonth_dayly()
+  ggplot(data=meters_dayly, aes(x=factor(`day(DateTime_GMT)`),kWh,group=Meter,color=Meter)) +
+    labs(x='Day', y='kWh') +
+    geom_line(aes(color=Meter),size=1) +
+    geom_line(aes(color=Meter),size=1) +
+    geom_line(aes(color=Meter),size=1) +
+    geom_line(aes(color=Meter),size=1) +
+    geom_line(aes(color=Meter),size=1) +
+    geom_line(aes(color=Meter),size=1) +
+    theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(),
+          axis.line = element_line(colour = "steelblue", size = 1, linetype = "solid"))
 })
+
 }
 shinyApp(ui = ui, server = server)
 
