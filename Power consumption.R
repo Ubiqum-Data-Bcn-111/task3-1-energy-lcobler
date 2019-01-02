@@ -238,7 +238,11 @@ autoplot(power_monthly_TS[,1]) +
 #Forecasting with ARIMA Model
 active_monthly_arima <- arima(power_monthly_TS[,1], order=c(0,0,0), seasonal=c(1,1,0)) # fit an ARIMA(0,0,0)(1,1,0) model
 active_monthly_arima_forecast <- forecast(active_monthly_arima,h=12) #forecast next year
-autoplot(active_monthly_arima_forecast)
+autoplot(active_monthly_arima_forecast)+
+  xlab("Year") + ylab("kWh") +
+  ggtitle("Forecast for monthly energy consumption") +
+  theme_bw()+
+  theme(legend.position = "none")
 checkresiduals(active_monthly_arima_forecast)
 accuracy(active_monthly_arima_forecast)
 # RMSE=78.34517 MAE=53.1985 MAPE=9.060036 MASE=0.5854239
@@ -329,7 +333,11 @@ reactive_linear <- tslm(power_monthly_TS[,2] ~ trend + season)
 summary(reactive_linear)
 #Forecast
 reactive_linear_forecast <- forecast(reactive_linear,h=12) #forecast next year
-autoplot(reactive_linear_forecast)
+autoplot(reactive_linear_forecast)+
+  xlab("Year") + ylab("kWh") +
+  ggtitle("Forecast for monthly reactive energy") +
+  theme_bw()+
+  theme(legend.position = "none")
 checkresiduals(reactive_linear_forecast)
 accuracy(reactive_linear_forecast)
 #RMSE=11.3821 MAE=8.893866 MAPE=9.967836 MASE=0.5989381
@@ -348,7 +356,7 @@ reactive_monthly_arima_forecast$upper-reactive_monthly_arima_forecast$lower
 # 80%: 38 95%:59
 
 
-#mix models?????
+#use the linear
 
 
 
@@ -423,7 +431,12 @@ meter3_monthly_HW
 #gamma: 0.54 seasonal component based on recent observations, changed a little from the training
 plot(meter3_monthly_HW)
 meter3_monthly_HW_forecasts <- forecast(meter3_monthly_HW,h=12) #forecast testing
-autoplot(meter3_monthly_HW_forecasts)
+autoplot(meter3_monthly_HW_forecasts)+
+  geom_line(size=1,color="red")+
+  xlab("Year") + ylab("kWh") +
+  ggtitle("Forecast for monthly energy consumption in boiler+AC") +
+  theme_bw()+
+  theme(legend.position = "none")
 checkresiduals(testing_meter3_monthly_HW_forecasts)
 accuracy(meter3_monthly_HW_forecasts)
 #RMSE=44.11075 MAE=32.57227 MAPE=15.84121 MASE=0.6933442
@@ -595,3 +608,30 @@ accuracy(meter2_linear_forecast)
 meter2_linear_forecast$upper-meter2_linear_forecast$lower
 #80%:34 95%:53
 
+#-----------------------------------Descriptive for the presentation------------------------------
+#different sub-meters during 2 days by hour
+labels <- c(Other = "Other", Sub_metering_1 = "Kitchen", Sub_metering_2="Laundry room", Sub_metering_3="Boiler+AC")
+power %>%
+  filter (DateTime_TC >= ymd_hms(20100322000000) & DateTime_TC <= ymd_hms(20100323235900)) %>%
+  gather (Meter, Wh, "Sub_metering_1", "Sub_metering_2","Sub_metering_3","Other") %>%
+  group_by(hour(DateTime_TC),weekdays(DateTime_TC), Meter) %>%
+  summarise(kWh=sum(Wh)/1000) %>% 
+  ggplot( aes(x=factor(`hour(DateTime_TC)`),kWh,group=Meter,color=Meter)) +
+  labs(x='Hour of the day', y='kWh') +
+  ggtitle("Energy usage by each sub-meter") +
+  geom_line(aes(color=Meter),size=1)+
+  facet_grid(factor(`weekdays(DateTime_TC)`)~Meter,labeller=labeller(Meter = labels))+
+  theme_dark()+
+  theme(legend.position = "none")
+
+#proportion of each submeter-yearly
+power %>%
+  filter(year(DateTime_TC) != 2006) %>%
+  gather (Meter, Wh, "Sub_metering_1", "Sub_metering_2","Sub_metering_3","Other") %>%
+  group_by(year(DateTime_TC), Meter) %>% 
+  summarise(kWh=sum(Wh)/1000) %>%
+  ggplot(aes(x=factor(`year(DateTime_TC)`), kWh, group=Meter,fill=Meter)) +
+  labs(x='Year', y='Proportion of Energy Usage') +
+  ggtitle('Yearly Energy Consumption') +
+  geom_bar(position='fill',stat="identity") +#stat=identity to plot sum, position=fill to have proportions
+  theme_dark()
