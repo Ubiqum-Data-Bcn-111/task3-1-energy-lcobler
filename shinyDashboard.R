@@ -63,6 +63,10 @@ power_dayly <- power %>%
 power_monthly_TS <- ts(power_monthly[2:47,3:8], frequency=12, start=c(2007,1))
 active_monthly_arima <- arima(power_monthly_TS[,1], order=c(0,0,0), seasonal=c(1,1,0)) # fit an ARIMA(0,0,0)(1,1,0) model
 active_monthly_arima_forecast <- forecast(active_monthly_arima,h=12) #forecast next year
+#change names for dates plot
+power_dates <- power %>% 
+  setNames(list("Total", "Reactive", "Voltage", "Intensity","Kitchen","Laundry room","Boiler+AC","DateTime_GMT","DateTime_TC","Other")) %>%
+  gather(Meter, kWh, "Kitchen", "Laundry room","Boiler+AC","Other","Total","Reactive")
 
 #----------------------user interface-------------------------------------------
 #Dashboard header carrying the title of the dashboard
@@ -71,7 +75,8 @@ header <- dashboardHeader(title = "User Dashboard")
 #Sidebar content of the dashboard
 sidebar <- dashboardSidebar(
   sidebarMenu(
-    menuItem("Dashboard", tabName = "dashboard", icon = icon("dashboard"))
+    menuItem("Dashboard", tabName = "dashboard", icon = icon("dashboard")),
+    menuItem("Energy consumption", tabName= "plot", icon = icon("bar-chart-o"))
     )
   )
 
@@ -128,8 +133,29 @@ frow2 <- fluidRow( #aligned plots
     plotOutput("meters", height = "350px")
     )
   )
+frow3 <- fluidRow( 
+  box(
+    title="Energy consumption",status="success",solidHeader = TRUE,
+    width= 9,
+    plotOutput("usage",height=400)),
+  box(
+    title="Controls",background = "purple",solidHeader = TRUE,
+    width=3, height ="462px",
+    dateRangeInput(inputId = "dates", label = "Date range", start="2010-11-23", end="2010-11-26"),
+    checkboxGroupInput("checkMeters", label = "Select meters: ", 
+                       choices = c("Kitchen", "Laundry room", "Boiler+AC", "Other", "Total", "Reactive"),
+                       selected = "Total")
+  )
+)
 #combine the fluid rows to make the body
-body <- dashboardBody(h1("Monthly summary"),frow0,frow1,frow2)
+body <- dashboardBody(
+  tags$head( 
+    tags$style(HTML(".main-sidebar { font-size: 20px; }")) #change the font size  of tab items to 20
+  ),
+  tabItems(
+    tabItem(tabName = "dashboard", h1("Monthly summary"),frow0,frow1,frow2),
+    tabItem(tabName = "plot", frow3)
+  ))
 ui <- dashboardPage(
   title = "Energy consumption", #title of the browser page
   header, sidebar, body,
@@ -148,6 +174,11 @@ server <- function(input, output) {
   selectedMonth_dayly <- reactive ({
     power_dayly %>% filter((`month(DateTime_GMT)`== input$selectmonth) & (`year(DateTime_GMT)`== input$selectyear) &
                              (Meter %in% input$selectMeter))
+  })
+  
+  selectedDates <- reactive ({
+    power_dates %>% filter((DateTime_TC >= input$dates[1] & DateTime_TC <= (input$dates[2]+days(1))) &
+                             (Meter %in% input$checkMeters))
   })
   
 output$gaugeKwh = renderGauge({  #if to change the previous months
@@ -223,10 +254,72 @@ output$consumption <- renderPlot({
     geom_line(aes(color=Meter),size=1) +
     geom_line(aes(color=Meter),size=1) +
     geom_line(aes(color=Meter),size=1) +
+    scale_colour_manual(values = c("Total" = "steelblue", "Reactive" = "#F564E3", "Kitchen"="#7CAE00","Laundry room"="#00BFC4",
+                                   "Boiler+AC"="#C77CFF","Other"="#F8766D"))+ #ASsign colors to each variable
     theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_blank(),
           axis.line = element_line(colour = "steelblue", size = 1, linetype = "solid"))
 })
 
+output$usage <- renderPlot ({
+  selectedDates <- selectedDates()
+  #date range 
+  #3 grouping depending on the selected days
+  if (difftime(input$dates[2], input$dates[1], "days") <= 15){
+    selectedDates %>%
+      group_by(hour(DateTime_TC),day(DateTime_TC), Meter) %>%
+      summarise(sum=sum(kWh)) %>%
+      ggplot( aes(x=factor(`hour(DateTime_TC)`),sum,group=Meter,color=Meter)) +
+      labs(x='Hour of the day', y='kWh') +
+      geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
+      scale_colour_manual(values = c("Total" = "steelblue", "Reactive" = "#F564E3", "Kitchen"="#7CAE00","Laundry room"="#00BFC4",
+                                     "Boiler+AC"="#C77CFF","Other"="#F8766D"))+
+      facet_wrap(~ factor(`day(DateTime_TC)`))+
+      theme (strip.text.x = element_text(size=12, face="bold"),
+             strip.background = element_rect (fill="#00B250"))
+  } else if (difftime(input$dates[2], input$dates[1], "days") <= 270) {
+    selectedDates %>%
+      group_by(day(DateTime_TC),month(DateTime_TC), Meter) %>%
+      summarise(sum=sum(kWh)) %>%
+      ggplot( aes(x=factor(`day(DateTime_TC)`),sum,group=Meter,color=Meter)) +
+      labs(x='Day of the month', y='kWh') +
+      geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
+      scale_colour_manual(values = c("Total" = "steelblue", "Reactive" = "#F564E3", "Kitchen"="#7CAE00","Laundry room"="#00BFC4",
+                                     "Boiler+AC"="#C77CFF","Other"="#F8766D"))+
+      facet_wrap(~ factor(`month(DateTime_TC)`))+
+      theme (strip.text.x = element_text(size=12, face="bold"),
+             strip.background = element_rect (fill="#00B250"))
+  } else {
+    selectedDates %>%
+      group_by(month(DateTime_TC),year(DateTime_TC), Meter) %>%
+      summarise(sum=sum(kWh)) %>%
+      ggplot( aes(x=factor(`month(DateTime_TC)`),sum,group=Meter,color=Meter)) +
+      labs(x='Month', y='kWh') +
+      geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
+      scale_colour_manual(values = c("Total" = "steelblue", "Reactive" = "#F564E3", "Kitchen"="#7CAE00","Laundry room"="#00BFC4",
+                                     "Boiler+AC"="#C77CFF","Other"="#F8766D"))+
+      facet_wrap(~ factor(`year(DateTime_TC)`))+
+      theme (strip.text.x = element_text(size=12, face="bold"),
+             strip.background = element_rect (fill="#00B250"))
+ }
+})
+
+
 }
 shinyApp(ui = ui, server = server)
+
 
