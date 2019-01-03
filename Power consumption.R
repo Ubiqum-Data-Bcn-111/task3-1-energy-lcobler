@@ -635,3 +635,58 @@ power %>%
   ggtitle('Yearly Energy Consumption') +
   geom_bar(position='fill',stat="identity") +#stat=identity to plot sum, position=fill to have proportions
   theme_dark()
+
+#----------isolate refrigerator---------------------------------------------------
+power %>%
+  filter (DateTime_TC >= ymd_hms(20100322000000) & DateTime_TC <= ymd_hms(20100322235900)) %>%
+  group_by(hour(DateTime_TC),weekdays(DateTime_TC)) %>%
+  summarise(sum=sum(Sub_metering_2)) %>%
+  ggplot( aes(x=factor(`hour(DateTime_TC)`),sum,group=1)) +
+  labs(x='Hour of the day', y='Wh') +
+  ggtitle("Energy usage in the laundry room") +
+  geom_line(color="cyan1",size=1)+
+  facet_grid(.~factor(`weekdays(DateTime_TC)`))+
+  theme_dark()
+#no grouping
+power %>%
+  filter (DateTime_TC >= ymd_hms(20100323000000) & DateTime_TC <= ymd_hms(20100323235900)) %>%
+  ggplot( aes(x=DateTime_TC,Sub_metering_2,group=1)) +
+  labs(x='Hour of the day', y='Wh') +
+  ggtitle("Energy usage in the laundry room") +
+  geom_line(color="cyan1")+
+  theme_dark()
+
+#remove all values >2 then group by hour
+power_fridge <- power[power$Sub_metering_2<=2, c(6,8)]
+power_fridge %>%
+  filter (DateTime_GMT >= ymd_hms(20100323000000) & DateTime_GMT <= ymd_hms(20100323235900)) %>%
+  ggplot( aes(x=DateTime_GMT,Sub_metering_2,group=1)) +
+  labs(x='Hour of the day', y='Wh') +
+  ggtitle("Energy usage in the laundry room") +
+  geom_line(color="cyan1")+
+  theme_dark()
+#include missing observations / removed with NAs
+allDates <- seq(min(power_fridge$DateTime_GMT), max(power_fridge$DateTime_GMT),by="mins")
+power_fridge <- merge(
+  x=data.frame(DateTime_GMT=allDates),
+  y=power_fridge,
+  all.x=TRUE)
+power_fridge %>%
+  filter (DateTime_GMT >= ymd_hms(20100323000000) & DateTime_GMT <= ymd_hms(20100323235900)) %>%
+  ggplot( aes(x=DateTime_GMT,Sub_metering_2,group=1)) +
+  labs(x='Hour of the day', y='Wh') +
+  ggtitle("Energy usage in the laundry room") +
+  geom_line(color="cyan1")+
+  theme_dark()
+#group by hour
+power_fridge %>%
+  filter (DateTime_GMT >= ymd_hms(20100323000000) & DateTime_GMT <= ymd_hms(20100323235900)) %>%
+  group_by(hour(DateTime_GMT),weekdays(DateTime_GMT)) %>%
+  summarise(sum=sum(Sub_metering_2)) %>%
+  ggplot( aes(x=factor(`hour(DateTime_GMT)`),sum,group=1)) +
+  labs(x='Hour of the day', y='Wh') +
+  ggtitle("Energy usage in the laundry room") +
+  geom_line(color="cyan1",size=1)+
+  facet_grid(.~factor(`weekdays(DateTime_GMT)`))+
+  theme_dark()
+#impute missing values
