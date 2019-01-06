@@ -51,7 +51,7 @@ power_monthly <- power %>%
             sub_metering_1=sum(Sub_metering_1)/1000,sub_metering_2=sum(Sub_metering_2)/1000,
             sub_metering_3=sum(Sub_metering_3)/1000, other=sum(Other)/1000) %>%
   arrange(`year(DateTime_GMT)`,`month(DateTime_GMT)`)
-#data manipulation for the dayly summary
+#data manipulation for the daily summary
 power_dayly <- power %>%
   group_by(day(DateTime_GMT),month(DateTime_GMT),year(DateTime_GMT)) %>%
   summarise(Total=sum(Global_active_power)/1000,Reactive=sum(Global_reactive_power)/1000,
@@ -63,10 +63,19 @@ power_dayly <- power %>%
 power_monthly_TS <- ts(power_monthly[2:47,3:8], frequency=12, start=c(2007,1))
 active_monthly_arima <- arima(power_monthly_TS[,1], order=c(0,0,0), seasonal=c(1,1,0)) # fit an ARIMA(0,0,0)(1,1,0) model
 active_monthly_arima_forecast <- forecast(active_monthly_arima,h=12) #forecast next year
+#isolate refrigerator
+library(imputeTS) #must be colled after fixing NAs to avoid masking
+power_fridge <- power[power$Sub_metering_2<=2, c(6,8)] #remove values >2
+allDates <- seq(min(power_fridge$DateTime_GMT), max(power_fridge$DateTime_GMT),by="mins") #include removed dates
+power_fridge <- merge(x=data.frame(DateTime_GMT=allDates), y=power_fridge, all.x=TRUE)
+fridge_ts <- ts(power_fridge[,2],frequency=525600) #time series to impute missing values
+fridge_ts <- na.seadec(fridge_ts,algorithm="interpolation") #impute NAs by removing seasonality and adding back
+pred_fridge <- as.matrix(fridge_ts) #refrigerator values with imputed NAs
+power <- cbind(power, pred_fridge) #add column with refrigerator values
 #change names for dates plot
-power_dates <- power %>% 
-  setNames(list("Total", "Reactive", "Voltage", "Intensity","Kitchen","Laundry room","Boiler+AC","DateTime_GMT","DateTime_TC","Other")) %>%
-  gather(Meter, kWh, "Kitchen", "Laundry room","Boiler+AC","Other","Total","Reactive")
+power_dates <- power%>% 
+  setNames(list("Total", "Reactive", "Voltage", "Intensity","Kitchen","Laundry room","Boiler+AC","DateTime_GMT","DateTime_TC","Other","Refrigerator")) %>%
+  gather(Meter, kWh, "Kitchen", "Laundry room","Boiler+AC","Other","Total","Reactive","Refrigerator")
 
 #----------------------user interface-------------------------------------------
 #Dashboard header carrying the title of the dashboard
@@ -143,7 +152,7 @@ frow3 <- fluidRow(
     width=3, height ="462px",
     dateRangeInput(inputId = "dates", label = "Date range", start="2010-11-23", end="2010-11-26"),
     checkboxGroupInput("checkMeters", label = "Select meters: ", 
-                       choices = c("Kitchen", "Laundry room", "Boiler+AC", "Other", "Total", "Reactive"),
+                       choices = c("Kitchen", "Laundry room", "Boiler+AC", "Other", "Total", "Reactive","Refrigerator"),
                        selected = "Total")
   )
 )
@@ -267,7 +276,7 @@ output$usage <- renderPlot ({
   if (difftime(input$dates[2], input$dates[1], "days") <= 15){
     selectedDates %>%
       group_by(hour(DateTime_TC),day(DateTime_TC), Meter) %>%
-      summarise(sum=sum(kWh)) %>%
+      summarise(sum=sum(kWh)/1000) %>%
       ggplot( aes(x=factor(`hour(DateTime_TC)`),sum,group=Meter,color=Meter)) +
       labs(x='Hour of the day', y='kWh') +
       geom_line(aes(color=Meter),size=1)+
@@ -276,15 +285,16 @@ output$usage <- renderPlot ({
       geom_line(aes(color=Meter),size=1)+
       geom_line(aes(color=Meter),size=1)+
       geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
       scale_colour_manual(values = c("Total" = "steelblue", "Reactive" = "#F564E3", "Kitchen"="#7CAE00","Laundry room"="#00BFC4",
-                                     "Boiler+AC"="#C77CFF","Other"="#F8766D"))+
+                                     "Boiler+AC"="#C77CFF","Other"="#F8766D","Refrigerator"="Orange"))+
       facet_wrap(~ factor(`day(DateTime_TC)`))+
       theme (strip.text.x = element_text(size=12, face="bold"),
              strip.background = element_rect (fill="#00B250"))
   } else if (difftime(input$dates[2], input$dates[1], "days") <= 270) {
     selectedDates %>%
       group_by(day(DateTime_TC),month(DateTime_TC), Meter) %>%
-      summarise(sum=sum(kWh)) %>%
+      summarise(sum=sum(kWh)/1000) %>%
       ggplot( aes(x=factor(`day(DateTime_TC)`),sum,group=Meter,color=Meter)) +
       labs(x='Day of the month', y='kWh') +
       geom_line(aes(color=Meter),size=1)+
@@ -293,15 +303,16 @@ output$usage <- renderPlot ({
       geom_line(aes(color=Meter),size=1)+
       geom_line(aes(color=Meter),size=1)+
       geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
       scale_colour_manual(values = c("Total" = "steelblue", "Reactive" = "#F564E3", "Kitchen"="#7CAE00","Laundry room"="#00BFC4",
-                                     "Boiler+AC"="#C77CFF","Other"="#F8766D"))+
+                                     "Boiler+AC"="#C77CFF","Other"="#F8766D","Refrigerator"="Orange"))+
       facet_wrap(~ factor(`month(DateTime_TC)`))+
       theme (strip.text.x = element_text(size=12, face="bold"),
              strip.background = element_rect (fill="#00B250"))
   } else {
     selectedDates %>%
       group_by(month(DateTime_TC),year(DateTime_TC), Meter) %>%
-      summarise(sum=sum(kWh)) %>%
+      summarise(sum=sum(kWh)/1000) %>%
       ggplot( aes(x=factor(`month(DateTime_TC)`),sum,group=Meter,color=Meter)) +
       labs(x='Month', y='kWh') +
       geom_line(aes(color=Meter),size=1)+
@@ -310,8 +321,9 @@ output$usage <- renderPlot ({
       geom_line(aes(color=Meter),size=1)+
       geom_line(aes(color=Meter),size=1)+
       geom_line(aes(color=Meter),size=1)+
+      geom_line(aes(color=Meter),size=1)+
       scale_colour_manual(values = c("Total" = "steelblue", "Reactive" = "#F564E3", "Kitchen"="#7CAE00","Laundry room"="#00BFC4",
-                                     "Boiler+AC"="#C77CFF","Other"="#F8766D"))+
+                                     "Boiler+AC"="#C77CFF","Other"="#F8766D","Refrigerator"="Orange"))+
       facet_wrap(~ factor(`year(DateTime_TC)`))+
       theme (strip.text.x = element_text(size=12, face="bold"),
              strip.background = element_rect (fill="#00B250"))

@@ -664,7 +664,7 @@ power %>%
   geom_bar(position='fill',stat="identity") +#stat=identity to plot sum, position=fill to have proportions
   theme_dark()
 
-#----------isolate refrigerator---------------------------------------------------
+#--------------------------isolate refrigerator---------------------------------------------------
 power %>%
   filter (DateTime_TC >= ymd_hms(20100322000000) & DateTime_TC <= ymd_hms(20100322235900)) %>%
   group_by(hour(DateTime_TC),weekdays(DateTime_TC)) %>%
@@ -716,9 +716,9 @@ power_fridge %>%
   ggtitle("Energy usage for the refrigerator") +
   geom_line(color="cyan1",size=1)+
   theme_dark()
-#impute missing values, use data from 1 oct2010 (28sept 2010 last day with missing values)
 #each cycle is 5.5h
 
+#impute missing values
 fridge_ts <- ts(power_fridge[,2],frequency=525600)
 plot(fridge_ts)
 fridge_ts <- na.seadec(fridge_ts,algorithm="interpolation")
@@ -750,52 +750,33 @@ power_fridge %>%
   theme_dark()
 #grouped by 1h shows acceptable  picks
 
-
-fridge_30min <- power_fridge %>%
-  filter (DateTime_GMT >= ymd_hms(20101101000000)) %>%
-  group_by(by30=cut(DateTime_GMT, "30 min")) %>%
-  summarise(wh=sum(Sub_metering_2))
-
-fridge_30min_all <- power_fridge %>%
-  filter(DateTime_GMT != 2006) %>%
-  group_by(by30=cut(DateTime_GMT, "30 min")) %>%
-  summarise(wh=sum(Sub_metering_2))
-
+#-------------------------------------------------forecast for the refrigerator---------------------------------
+#group by hour
 fridge_h <- power_fridge %>%
-  filter (DateTime_GMT >= ymd_hms(20101001000000)) %>%
+  filter((year(DateTime_GMT)==2010) | (year(DateTime_GMT)==2009) | (year(DateTime_GMT)==2008)) %>% #only 2009 and 2010 to shorten the ts
   group_by(by1h=cut(DateTime_GMT, "1 hour")) %>%
-  summarise(wh=sum(Sub_metering_2))
- 
-#ask with lubridate how many hours to calculate how many 30min periods
-#do time series
-#na.desc
-#decompose
-#forecastings
+  summarise(wh=sum(pred_fridge))
+#time series
+fridge_h_ts <- ts(fridge_h[,2],frequency=8766, start=2008)
+autoplot(window(fridge_h_ts, start = 2010.86) )
+fridge_testing <-window(fridge_h_ts, start= 2010.86) 
+fridge_training <-window(fridge_h_ts, end=2010.86)    
+#components for sub-meter2
+fridge_h_components <- decompose(fridge_h_ts) #estimated variables: seasonal, trend and irregular 
+autoplot(fridge_h_components)
 
-fridge_ts <- ts(fridge_30min_all[,2],frequency=17520, start=2007)
-fridge_ts <- na.seadec(fridge_ts,algorithm="interpolation")
-fridge_ts_decomp <- decompose(fridge_ts)
-autoplot(fridge_ts_decomp)
-autoplot(auto.arima(fridge_ts))
+#Holt-Winters 
+training_fridge_HW <- HoltWinters(fridge_training)
+plot(window(fridge_h_ts, start = 2010.85))
+#forecast
+training_fridge_HW_forecasts <- forecast(training_fridge_HW,h=391) #forecast testing
+autoplot(training_fridge_HW_forecasts$mean)+
+  autolayer(fridge_testing, series="True")
+checkresiduals(training_fridge_HW_forecasts)
+accuracy(training_fridge_HW_forecasts,fridge_testing)
+#RMSE=30 MAE=25, MASE=1
+#check 80% and 95% confidence interval
+training_fridge_HW_forecasts$upper-training_fridge_HW_forecasts$lower
+#85%:65 95%:100
 
-
-fridge_ts <- zoo(x=fridge_30min$wh, order.by = fridge_30min$by30, frequency = 11) #each pick is every 11 blocks of 30min
-fridge_ts <- as.zoo(fridge_ts)
-plot(fridge_ts)
-#impute the missing values with the imputeTS package
-fridge_ts <- na.seadec(fridge_ts,algorithm="interpolation") #error missing values????
-fridge_ts <- ts(coredata(fridge_ts),frequency = 11)
-fridge_ts <- na.seadec(fridge_ts,algorithm = "interpolation")
-plot(fridge_ts)
-#training and testing
-fridge_testing <-window(fridge_ts, from=)  #30%
-fridge_training <-window(fridge_ts, index = index(fridge_ts)[1:1910])    #70%
-#ARIMA model works with zoo objects
-auto.arima(fridge_ts,seasonal = TRUE) #(5,1,4)
-#arima model 
-training_fridge_arima <- arima(fridge_training, order=c(5,1,4)) 
-training_fridge_arima_forecast <- forecast(training_fridge_arima,h=820) #forecast next year
-autoplot(training_fridge_arima_forecast)
-checkresiduals(training_fridge_arima_forecast)
-
-
+#needs improving
