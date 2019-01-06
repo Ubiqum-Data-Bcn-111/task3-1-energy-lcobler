@@ -15,6 +15,9 @@ library(httr)
 cat(content(GET("https://raw.githubusercontent.com/iascchen/VisHealth/master/R/calendarHeat.R"), "text"), file="calendarHeat.R")
 source("calendarHeat.R")
 library(opera)
+library(imputeTS)
+library(xts)
+library(forecast)
 
 #Download dataset
 power <- read_delim('household_power_consumption.txt', col_names = TRUE,delim=';',na='?') 
@@ -96,7 +99,7 @@ power %>%
   ggtitle("Global active power") +
   geom_line(aes(y=Global_active_power),size=1,color="green1")
 #take value just before (using zoo library)
-power <- na.locf(power, fromLast = FALSE) 
+power <- na.locf(power)# fromLast = FALSE) 
 anyNA(power)
 
 #-------------------------------------------Forecasting monthly energy consumption--------------------------------------
@@ -241,8 +244,7 @@ active_monthly_arima_forecast <- forecast(active_monthly_arima,h=12) #forecast n
 autoplot(active_monthly_arima_forecast)+
   xlab("Year") + ylab("kWh") +
   ggtitle("Forecast for monthly energy consumption") +
-  theme_bw()+
-  theme(legend.position = "none")
+  theme_bw()
 checkresiduals(active_monthly_arima_forecast)
 accuracy(active_monthly_arima_forecast)
 # RMSE=78.34517 MAE=53.1985 MAPE=9.060036 MASE=0.5854239
@@ -348,17 +350,17 @@ reactive_linear_forecast$upper-reactive_linear_forecast$lower
 #Forecasting with ARIMA
 reactive_monthly_arima <- arima(power_monthly_TS[,2], order=c(0,0,1), seasonal=c(0,0,1)) 
 reactive_monthly_arima_forecast <- forecast(reactive_monthly_arima,h=12) #forecast next year
-autoplot(reactive_monthly_arima_forecast)
+autoplot(reactive_monthly_arima_forecast)+
+  xlab("Year") + ylab("kWh") +
+  ggtitle("Forecast for monthly reactive energy") +
+  theme_bw()
 accuracy(reactive_monthly_arima_forecast)
 # RMSE=12.48428 MAE=9.79477 MAPE=11. MASE=0.6596075
 #check 80% and 95% confidence interval
 reactive_monthly_arima_forecast$upper-reactive_monthly_arima_forecast$lower
 # 80%: 38 95%:59
 
-
-#use the linear
-
-
+#use ARIMA
 
 #------------------------Forecasting monthly sub-meter3 energy consumption--------------------------------------
 #components for sub-meter3
@@ -435,8 +437,7 @@ autoplot(meter3_monthly_HW_forecasts)+
   geom_line(size=1,color="red")+
   xlab("Year") + ylab("kWh") +
   ggtitle("Forecast for monthly energy consumption in boiler+AC") +
-  theme_bw()+
-  theme(legend.position = "none")
+  theme_bw()
 checkresiduals(testing_meter3_monthly_HW_forecasts)
 accuracy(meter3_monthly_HW_forecasts)
 #RMSE=44.11075 MAE=32.57227 MAPE=15.84121 MASE=0.6933442
@@ -525,7 +526,11 @@ meter1_monthly_HW
 #gamma: 0.20 seasonal component based on past and recent observations,
 plot(meter1_monthly_HW)
 meter1_monthly_HW_forecasts <- forecast(meter1_monthly_HW,h=12) #forecast testing
-autoplot(meter1_monthly_HW_forecasts)
+autoplot(meter1_monthly_HW_forecasts)+
+  geom_line(size=1,color="red")+
+  xlab("Year") + ylab("kWh") +
+  ggtitle("Forecast for monthly energy consumption in the Kitchen") +
+  theme_bw()
 checkresiduals(meter1_monthly_HW_forecasts)
 accuracy(meter1_monthly_HW_forecasts)
 #RMSE=13.1304 MAE=10.04051 MAPE=47.1713 MASE=0.778721
@@ -600,13 +605,36 @@ meter2_linear <- tslm(power_monthly_TS[,4] ~ trend + season)
 summary(meter2_linear)
 #Forecast
 meter2_linear_forecast <- forecast(meter2_linear,h=12) #forecast next year
-autoplot(meter2_linear_forecast)
+autoplot(meter2_linear_forecast)+
+  xlab("Year") + ylab("kWh") +
+  ggtitle("Forecast for monthly energy consumption in the laundry room") +
+  theme_bw()
 checkresiduals(meter2_linear_forecast)
 accuracy(meter2_linear_forecast)
 #RMSE=9.488194 MAE=7.224636 MAPE=14.93769 MASE=0.4743367
 #check 80% and 95% confidence interval
 meter2_linear_forecast$upper-meter2_linear_forecast$lower
 #80%:34 95%:53
+
+#Holt Winters
+meter2_monthly_HW <- HoltWinters(power_monthly_TS[,4])
+meter2_monthly_HW
+#alpha: 0.18 level based on both recent and past observations
+#beta: 0 slope of the trend based on past and recent observations
+#gamma: 0.45 seasonal component based on past observations,
+plot(meter2_monthly_HW)
+#forecast
+meter2_monthly_HW_forecasts <- forecast(meter2_monthly_HW,h=12)
+autoplot(meter2_monthly_HW_forecasts)
+
+checkresiduals(meter2_monthly_HW_forecasts)
+accuracy(meter2_monthly_HW_forecasts)
+#RMSE=12.48525 MAE=9.676073 MAPE=21.84323 MASE=0.6352869
+#check 80% and 95% confidence interval
+meter2_monthly_HW_forecasts$upper-meter2_monthly_HW_forecasts$lower
+#85%:37 95%:58
+
+#Use Linear regression
 
 #-----------------------------------Descriptive for the presentation------------------------------
 #different sub-meters during 2 days by hour
@@ -672,21 +700,102 @@ power_fridge <- merge(
   y=power_fridge,
   all.x=TRUE)
 power_fridge %>%
-  filter (DateTime_GMT >= ymd_hms(20100323000000) & DateTime_GMT <= ymd_hms(20100323235900)) %>%
+  filter (DateTime_GMT >= ymd_hms(20101001000000)) %>% # & DateTime_GMT <= ymd_hms(20101023235900)) %>%
   ggplot( aes(x=DateTime_GMT,Sub_metering_2,group=1)) +
   labs(x='Hour of the day', y='Wh') +
   ggtitle("Energy usage in the laundry room") +
   geom_line(color="cyan1")+
   theme_dark()
-#group by hour
+#group by 30min
 power_fridge %>%
-  filter (DateTime_GMT >= ymd_hms(20100323000000) & DateTime_GMT <= ymd_hms(20100323235900)) %>%
-  group_by(hour(DateTime_GMT),weekdays(DateTime_GMT)) %>%
+  filter (DateTime_GMT >= ymd_hms(20100323000000) & DateTime_GMT <= ymd_hms(20100325235900)) %>%
+  group_by(by30=cut(DateTime_GMT, "30 min")) %>%
   summarise(sum=sum(Sub_metering_2)) %>%
-  ggplot( aes(x=factor(`hour(DateTime_GMT)`),sum,group=1)) +
-  labs(x='Hour of the day', y='Wh') +
-  ggtitle("Energy usage in the laundry room") +
+  ggplot( aes(x=by30,sum,group=1)) +
+  labs(x='Time', y='Wh') +
+  ggtitle("Energy usage for the refrigerator") +
   geom_line(color="cyan1",size=1)+
-  facet_grid(.~factor(`weekdays(DateTime_GMT)`))+
   theme_dark()
-#impute missing values
+#impute missing values, use data from 1 oct2010 (28sept 2010 last day with missing values)
+#each cycle is 5.5h
+
+fridge_ts <- ts(power_fridge[,2],frequency=525600)
+plot(fridge_ts)
+fridge_ts <- na.seadec(fridge_ts,algorithm="interpolation")
+plot(fridge_ts)
+
+#return to data frame for descriptive
+pred_fridge <- as.matrix(fridge_ts)
+power_fridge <- cbind(power_fridge, pred_fridge)
+
+power_fridge %>%
+  filter (DateTime_GMT >= ymd_hms(20101123000000) & DateTime_GMT <= ymd_hms(20101125235900)) %>%
+  group_by(by30=cut(DateTime_GMT, "30 min")) %>%
+  summarise(sub2=sum(Sub_metering_2),pred=sum(pred_fridge)) %>%
+  ggplot( aes(x=by30,sub2,group=1)) +
+  labs(x='Time', y='Wh') +
+  ggtitle("Energy usage for the refrigerator") +
+  geom_line(aes(y=pred),color="red",size=1)+
+  geom_line(color="cyan1",size=1)+
+  theme_dark()
+power_fridge %>%
+  filter (DateTime_GMT >= ymd_hms(20101101000000) & DateTime_GMT <= ymd_hms(20101104235900)) %>%
+  group_by(by1h=cut(DateTime_GMT, "1 hour")) %>%
+  summarise(sub2=sum(Sub_metering_2),pred=sum(pred_fridge)) %>%
+  ggplot( aes(x=by1h,sub2,group=1)) +
+  labs(x='Time', y='Wh') +
+  ggtitle("Energy usage for the refrigerator") +
+  geom_line(aes(y=pred),color="red",size=1)+
+  geom_line(color="cyan1",size=1)+
+  theme_dark()
+#grouped by 1h shows acceptable  picks
+
+
+fridge_30min <- power_fridge %>%
+  filter (DateTime_GMT >= ymd_hms(20101101000000)) %>%
+  group_by(by30=cut(DateTime_GMT, "30 min")) %>%
+  summarise(wh=sum(Sub_metering_2))
+
+fridge_30min_all <- power_fridge %>%
+  filter(DateTime_GMT != 2006) %>%
+  group_by(by30=cut(DateTime_GMT, "30 min")) %>%
+  summarise(wh=sum(Sub_metering_2))
+
+fridge_h <- power_fridge %>%
+  filter (DateTime_GMT >= ymd_hms(20101001000000)) %>%
+  group_by(by1h=cut(DateTime_GMT, "1 hour")) %>%
+  summarise(wh=sum(Sub_metering_2))
+ 
+#ask with lubridate how many hours to calculate how many 30min periods
+#do time series
+#na.desc
+#decompose
+#forecastings
+
+fridge_ts <- ts(fridge_30min_all[,2],frequency=17520, start=2007)
+fridge_ts <- na.seadec(fridge_ts,algorithm="interpolation")
+fridge_ts_decomp <- decompose(fridge_ts)
+autoplot(fridge_ts_decomp)
+autoplot(auto.arima(fridge_ts))
+
+
+fridge_ts <- zoo(x=fridge_30min$wh, order.by = fridge_30min$by30, frequency = 11) #each pick is every 11 blocks of 30min
+fridge_ts <- as.zoo(fridge_ts)
+plot(fridge_ts)
+#impute the missing values with the imputeTS package
+fridge_ts <- na.seadec(fridge_ts,algorithm="interpolation") #error missing values????
+fridge_ts <- ts(coredata(fridge_ts),frequency = 11)
+fridge_ts <- na.seadec(fridge_ts,algorithm = "interpolation")
+plot(fridge_ts)
+#training and testing
+fridge_testing <-window(fridge_ts, from=)  #30%
+fridge_training <-window(fridge_ts, index = index(fridge_ts)[1:1910])    #70%
+#ARIMA model works with zoo objects
+auto.arima(fridge_ts,seasonal = TRUE) #(5,1,4)
+#arima model 
+training_fridge_arima <- arima(fridge_training, order=c(5,1,4)) 
+training_fridge_arima_forecast <- forecast(training_fridge_arima,h=820) #forecast next year
+autoplot(training_fridge_arima_forecast)
+checkresiduals(training_fridge_arima_forecast)
+
+
