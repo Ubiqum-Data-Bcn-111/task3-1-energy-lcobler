@@ -329,6 +329,18 @@ autoplot(power_monthly_TS[,2]) +
   xlab("Year") + ylab("kWh") +
   ggtitle("Forecasts for monthly energy consumption") +
   guides(colour=guide_legend(title="Forecast"))
+#does not know how to do the forecast, only get the weights, 
+#hybridModel library mixes models but with fixed proportions for all months
+######### hybrid model forecast example code ######
+
+mix.model <- hybridModel(ts_month, models = c("z", "e", "s"), weights = "insample") # a = auto.arima, z = snaive, e = ets, s = stml
+
+mix.model.fore <- forecast(mix.model, h = 20)
+
+plot(mix.model.fore)
+
+
+
 
 #Forecasting with linear regression
 reactive_linear <- tslm(power_monthly_TS[,2] ~ trend + season)
